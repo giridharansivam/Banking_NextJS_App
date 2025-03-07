@@ -16,25 +16,44 @@ import { getTransactionsByBankId } from "./transaction.actions";
 import { getBanks, getBank } from "./user.actions";
 
 // Get multiple bank accounts
+// Get multiple bank accounts
 export const getAccounts = async ({ userId }: getAccountsProps) => {
   try {
     // get banks from db
     const banks = await getBanks({ userId });
 
+    if (!banks || banks.length === 0) {
+      console.error("No banks found for the user.");
+      return parseStringify({ data: [], totalBanks: 0, totalCurrentBalance: 0 });
+    }
+
     const accounts = await Promise.all(
       banks?.map(async (bank: Bank) => {
-        // get each account info from plaid
+        // Ensure bank has an access token
+        if (!bank.accessToken) {
+          console.error(`Bank ${bank.$id} does not have an access token.`);
+          return null;
+        }
+
+        // Get each account info from Plaid
         const accountsResponse = await plaidClient.accountsGet({
           access_token: bank.accessToken,
         });
+
+        // Ensure accountsResponse contains data
+        if (!accountsResponse || !accountsResponse.data || !accountsResponse.data.accounts) {
+          console.error(`No account data found for bank ${bank.$id}`);
+          return null;
+        }
+
         const accountData = accountsResponse.data.accounts[0];
 
-        // get institution info from plaid
+        // Get institution info from Plaid
         const institution = await getInstitution({
           institutionId: accountsResponse.data.item.institution_id!,
         });
 
-        const account = {
+        return {
           id: accountData.account_id,
           availableBalance: accountData.balances.available!,
           currentBalance: accountData.balances.current!,
@@ -47,35 +66,49 @@ export const getAccounts = async ({ userId }: getAccountsProps) => {
           appwriteItemId: bank.$id,
           sharaebleId: bank.shareableId,
         };
-
-        return account;
       })
     );
 
-    const totalBanks = accounts.length;
-    const totalCurrentBalance = accounts.reduce((total, account) => {
+    // Filter out null accounts
+    const validAccounts = accounts.filter((account) => account !== null);
+
+    const totalBanks = validAccounts.length;
+    const totalCurrentBalance = validAccounts.reduce((total, account) => {
       return total + account.currentBalance;
     }, 0);
 
-    return parseStringify({ data: accounts, totalBanks, totalCurrentBalance });
+    return parseStringify({ data: validAccounts, totalBanks, totalCurrentBalance });
   } catch (error) {
     console.error("An error occurred while getting the accounts:", error);
   }
 };
 
+
+// Get one bank account
 // Get one bank account
 export const getAccount = async ({ appwriteItemId }: getAccountProps) => {
   try {
-    // get bank from db
+    // Get bank from db
     const bank = await getBank({ documentId: appwriteItemId });
 
-    // get account info from plaid
+    if (!bank || !bank.accessToken) {
+      console.error("Bank or access token is missing.");
+      return;
+    }
+
+    // Get account info from Plaid
     const accountsResponse = await plaidClient.accountsGet({
       access_token: bank.accessToken,
     });
+
+    if (!accountsResponse || !accountsResponse.data || !accountsResponse.data.accounts[0]) {
+      console.error("No account data found for the bank.");
+      return;
+    }
+
     const accountData = accountsResponse.data.accounts[0];
 
-    // get transfer transactions from appwrite
+    // Get transfer transactions from Appwrite
     const transferTransactionsData = await getTransactionsByBankId({
       bankId: bank.$id,
     });
@@ -92,7 +125,7 @@ export const getAccount = async ({ appwriteItemId }: getAccountProps) => {
       })
     );
 
-    // get institution info from plaid
+    // Get institution info from Plaid
     const institution = await getInstitution({
       institutionId: accountsResponse.data.item.institution_id!,
     });
@@ -114,8 +147,8 @@ export const getAccount = async ({ appwriteItemId }: getAccountProps) => {
       appwriteItemId: bank.$id,
     };
 
-    // sort transactions by date such that the most recent transaction is first
-      const allTransactions = [...transactions, ...transferTransactions].sort(
+    // Sort transactions by date (most recent first)
+    const allTransactions = [...transactions, ...transferTransactions].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
     );
 
@@ -147,6 +180,7 @@ export const getInstitution = async ({
 };
 
 // Get transactions
+// Get transactions
 export const getTransactions = async ({
   accessToken,
 }: getTransactionsProps) => {
@@ -160,26 +194,36 @@ export const getTransactions = async ({
         access_token: accessToken,
       });
 
-      const data = response.data;
+      // Safely check if the response contains `added` data
+      if (response.data && response.data.added) {
+        transactions = response.data.added.map((transaction) => ({
+          id: transaction.transaction_id,
+          name: transaction.name,
+          paymentChannel: transaction.payment_channel,
+          type: transaction.payment_channel,
+          accountId: transaction.account_id,
+          amount: transaction.amount,
+          pending: transaction.pending,
+          category: transaction.category ? transaction.category[0] : "",
+          date: transaction.date,
+          image: transaction.logo_url,
+        }));
+      } else {
+        console.error("No added transactions found in the response");
+      }
 
-      transactions = response.data.added.map((transaction) => ({
-        id: transaction.transaction_id,
-        name: transaction.name,
-        paymentChannel: transaction.payment_channel,
-        type: transaction.payment_channel,
-        accountId: transaction.account_id,
-        amount: transaction.amount,
-        pending: transaction.pending,
-        category: transaction.category ? transaction.category[0] : "",
-        date: transaction.date,
-        image: transaction.logo_url,
-      }));
+      hasMore = response.data.has_more;
 
-      hasMore = data.has_more;
+      // If there are more transactions, continue fetching the next set
+      if (hasMore) {
+        console.log("Fetching more transactions...");
+      }
     }
 
     return parseStringify(transactions);
   } catch (error) {
-    console.error("An error occurred while getting the accounts:", error);
+    // Log detailed error information
+    console.error("An error occurred while fetching transactions:", error);
+    throw error; // Optionally, you can throw the error again or handle it accordingly
   }
 };
