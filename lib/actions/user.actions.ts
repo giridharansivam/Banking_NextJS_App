@@ -44,7 +44,8 @@ export const signIn = async ({ email, password }: signInProps) => {
       path: "/",
       httpOnly: true,
       sameSite: "strict",
-      secure: true,
+      secure: process.env.NODE_ENV === 'production', // only set secure flag in production
+
     });
 
     const user = await getUserInfo({ userId: session.userId }) 
