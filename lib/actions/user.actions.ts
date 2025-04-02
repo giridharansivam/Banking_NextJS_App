@@ -100,7 +100,7 @@ export const signUp = async ({ password, ...userData }: SignUpParams) => {
     cookies().set("appwrite-session", session.secret, {
       path: "/",
       httpOnly: true,
-      sameSite: "strict",
+      sameSite: "lax",
       secure: true,
     });
 
